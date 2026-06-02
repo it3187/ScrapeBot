@@ -58,6 +58,8 @@ def main():
     line_notifier = LineNotifier(config_path="config.json")
     
     new_products = []
+    # 発生したエラーを記録するリストです
+    scraping_errors = []
     
     if not only_analysis:
         # ==========================================
@@ -78,7 +80,9 @@ def main():
                 logger.info(f"【{shop_name}】から {len(products)} 件の商品データを取得しました。")
                 new_products.extend(products)
             except Exception as e:
+                error_msg = f"{shop_name} (エラー内容: {e})"
                 logger.error(f"【{shop_name}】からのデータ収集中にエラーが発生しました（スキップ）: {e}")
+                scraping_errors.append(error_msg)
                 continue
                 
         if not new_products:
@@ -125,6 +129,10 @@ def main():
     
     # 結果のコンソール出力
     logger.info("==================================================")
+    
+    # LINE通知の設定がされているかチェックします
+    line_configured = line_notifier.channel_access_token and line_notifier.user_id
+    
     if bargains:
         logger.info(f"🎉 超お買い得な商品が {len(bargains)} 件見つかりました！ (しきい値: 相場より {threshold}% 以上安い)")
         logger.info("==================================================")
@@ -140,7 +148,7 @@ def main():
         # ==========================================
         # ステップ 5: LINE Notify へのプッシュ通知自動送信
         # ==========================================
-        if line_notifier.channel_access_token and line_notifier.user_id:
+        if line_configured:
             logger.info("=== [ステップ 5] お買い得商品のLINEプッシュ通知を自動送信します ===")
             for i, item in enumerate(bargains):
                 # 差額の算出
@@ -160,10 +168,33 @@ def main():
                 line_notifier.send_notification(message)
         else:
             logger.info("※LINE設定（チャネルアクセストークン/ユーザーID）が設定されていないため、LINEプッシュ通知はスキップされました。")
-            logger.info("  通知を受け取りたい場合は、'config.json' に正しい接続情報を設定してください。")
             
     else:
         logger.info(f"🔎 今回はお買い得基準（相場平均より {threshold}% 以上安い）を満たす商品は検出されませんでした。")
+        
+        # お買い得品がなかったときの日報通知を送信します
+        if line_configured:
+            logger.info("=== [ステップ 5] 巡回日報のLINE通知を送信します ===")
+            status_message = (
+                f"\n【🔍 ScrapeBot 稼働日報】\n"
+                f"本日の定期巡回を完了しました。\n"
+                f"相場平均より {threshold}% 以上安いお買い得商品は見つかりませんでした。\n"
+                f"（今回の総巡回商品数: {len(new_products)} 件）"
+            )
+            line_notifier.send_notification(status_message)
+
+    # スクレイピング時にエラーが発生していた場合、LINEにエラーアラートを送信します
+    if scraping_errors and line_configured:
+        logger.info("=== [エラー発生] LINEエラーアラートを送信します ===")
+        error_list_str = "\n".join([f"- {err}" for err in scraping_errors])
+        error_message = (
+            f"\n【⚠️ ScrapeBot エラー警告】\n"
+            f"巡回中に以下の店舗でエラーが発生しました。\n"
+            f"サイト構造の変更や通信エラーの可能性があります。\n\n"
+            f"{error_list_str}"
+        )
+        line_notifier.send_notification(error_message)
+
     logger.info("==================================================")
 
 if __name__ == "__main__":
