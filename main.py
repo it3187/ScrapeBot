@@ -13,6 +13,34 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+def is_target_macbook(item: dict) -> bool:
+    """
+    収集された商品が、ターゲットとする「M5搭載15インチMacBook Air (32GB / 1TB)」に合致するか判定します。
+    """
+    name = item.get("name", "").lower()
+    attrs = item.get("attributes", {})
+    
+    # 1. CPU判定: M5
+    cpu = attrs.get("cpu", "").lower()
+    if "m5" not in cpu and "m5" not in name:
+        return False
+        
+    # 2. インチ数判定: 15インチ
+    if "15" not in name:
+        return False
+        
+    # 3. メモリ判定: 32GB
+    memory = attrs.get("memory", "").lower()
+    if "32" not in memory and "32g" not in name:
+        return False
+        
+    # 4. ストレージ判定: 1TB
+    storage = attrs.get("storage", "").lower()
+    if "1tb" not in storage and "1tb" not in name:
+        return False
+        
+    return True
+
 def main():
     """
     データ収集 ➔ 重複排除蓄積 ➔ 相場価格算出 ➔ お買い得検出 ➔ LINE通知送信
@@ -29,12 +57,12 @@ def main():
         default="MacBook",
         help="検索したい製品名やキーワード（デフォルト: 'MacBook'）"
     )
-    # オプション引数：お買い得基準となる割引率（デフォルトは 20.0%）
+    # オプション引数：お買い得基準となる割引率（デフォルトは 10.0%）
     parser.add_argument(
         "--threshold",
         type=float,
-        default=20.0,
-        help="平均相場より何%%安ければお買い得と判定するか（デフォルト: 20）"
+        default=10.0,
+        help="平均相場より何%%安ければお買い得と判定するか（デフォルト: 10）"
     )
     # オプション引数：分析のみを実行するフラグ（再スクレイピングで負荷をかけない親切機能です）
     parser.add_argument(
@@ -49,7 +77,7 @@ def main():
     only_analysis = args.only_analysis
     
     # 蓄積・分析用のファイルパス
-    data_filepath = "macbook_data.json"
+    data_filepath = "s:\\00_Apps\\10_AgyManager\\data\\macbook_data.json"
     
     # 各モジュール（金庫番、数学者、目利き、郵便屋さん）を用意します
     data_manager = DataManager()
@@ -98,18 +126,18 @@ def main():
         logger.info("=== [ステップ 1&2 スキップ] 既存の蓄積データを用いて相場分析を開始します ===")
         consolidated_data = data_manager.load_data(data_filepath)
         new_products = consolidated_data
-
+ 
     if not consolidated_data:
         logger.error("分析対象となるデータがありません。プログラムを終了します。")
         return
-
+ 
     # ==========================================
     # ステップ 3: スペック別の平均相場の自動計算
     # ==========================================
     logger.info("=== [ステップ 3] スペックごとの平均相場を自動計算します ===")
     group_analytics = price_analyzer.calculate_averages(consolidated_data)
     
-    # 算出したグループ別の相場を画面に一覧表示します（見やすく整理）
+    # 算算出グループ別の相場を画面に一覧表示します（見やすく整理）
     logger.info("------------- スペック別 平均相場一覧 -------------")
     for key, stats in sorted(group_analytics.items(), key=lambda x: x[1]["count"], reverse=True)[:15]:
         logger.info(
@@ -120,12 +148,15 @@ def main():
     if len(group_analytics) > 15:
         logger.info(f"...他 {len(group_analytics) - 15} 個のグループを分析済み")
     logger.info("--------------------------------------------------")
-
+ 
     # ==========================================
     # ステップ 4: 相場より割安な「お買い得商品」の自動判定
     # ==========================================
     logger.info("=== [ステップ 4] 相場より割安な『お買い得商品』を自動検知します ===")
     bargains = deal_detector.detect_bargains(new_products, group_analytics)
+    
+    # ターゲットのみを抽出したお買い得品リスト
+    target_bargains = [item for item in bargains if is_target_macbook(item)]
     
     # 結果のコンソール出力
     logger.info("==================================================")
@@ -133,10 +164,10 @@ def main():
     # LINE通知の設定がされているかチェックします
     line_configured = line_notifier.channel_access_token and line_notifier.user_id
     
-    if bargains:
-        logger.info(f"🎉 超お買い得な商品が {len(bargains)} 件見つかりました！ (しきい値: 相場より {threshold}% 以上安い)")
+    if target_bargains:
+        logger.info(f"🎉 ターゲット構成（M5/15\"/32GB/1TB）のお買い得な商品が {len(target_bargains)} 件見つかりました！ (しきい値: 相場より {threshold}% 以上安い)")
         logger.info("==================================================")
-        for i, item in enumerate(bargains):
+        for i, item in enumerate(target_bargains):
             logger.info(
                 f"🔥 お買い得 #{i+1} 【{item['discount_pct']}% OFF!!】\n"
                 f"   商品名  : {item['name']}\n"
@@ -150,7 +181,7 @@ def main():
         # ==========================================
         if line_configured:
             logger.info("=== [ステップ 5] お買い得商品のLINEプッシュ通知を自動送信します ===")
-            for i, item in enumerate(bargains):
+            for i, item in enumerate(target_bargains):
                 # 差額の算出
                 difference = item["average_price"] - item["price"]
                 
@@ -170,32 +201,32 @@ def main():
             logger.info("※LINE設定（チャネルアクセストークン/ユーザーID）が設定されていないため、LINEプッシュ通知はスキップされました。")
             
     else:
-        logger.info(f"🔎 今回はお買い得基準（相場平均より {threshold}% 以上安い）を満たす商品は検出されませんでした。")
+        logger.info(f"🔎 今回はターゲット構成のお買い得基準（相場平均より {threshold}% 以上安い）を満たす商品は検出されませんでした。")
         
         # お買い得品がなかったときの日報通知を送信します
         if line_configured:
             logger.info("=== [ステップ 5] 巡回日報のLINE通知を送信します ===")
             status_message = (
-                f"\n【🔍 ScrapeBot 稼働日報】\n"
+                f"\n【🔍 Snitch 稼働日報】\n"
                 f"本日の定期巡回を完了しました。\n"
-                f"相場平均より {threshold}% 以上安いお買い得商品は見つかりませんでした。\n"
+                f"ターゲット構成（M5/15\"/32GB/1TB）の相場平均より {threshold}% 以上安いお買い得商品は見つかりませんでした。\n"
                 f"（今回の総巡回商品数: {len(new_products)} 件）"
             )
             line_notifier.send_notification(status_message)
-
+ 
     # スクレイピング時にエラーが発生していた場合、LINEにエラーアラートを送信します
     if scraping_errors and line_configured:
         logger.info("=== [エラー発生] LINEエラーアラートを送信します ===")
         error_list_str = "\n".join([f"- {err}" for err in scraping_errors])
         error_message = (
-            f"\n【⚠️ ScrapeBot エラー警告】\n"
+            f"\n【⚠️ Snitch エラー警告】\n"
             f"巡回中に以下の店舗でエラーが発生しました。\n"
             f"サイト構造の変更や通信エラーの可能性があります。\n\n"
             f"{error_list_str}"
         )
         line_notifier.send_notification(error_message)
-
+ 
     logger.info("==================================================")
-
+ 
 if __name__ == "__main__":
     main()
